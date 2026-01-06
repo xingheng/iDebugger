@@ -1,0 +1,47 @@
+//
+//  Debugger.h
+//
+//  Created by Will Han on 2024/11/7.
+//
+
+#import <UIKit/UIKit.h>
+
+NS_ASSUME_NONNULL_BEGIN
+
+typedef void (^ DebugActionBlock)(void);
+
+@interface DebugAction : NSObject
+
++ (void)add:(NSString *)title action:(DebugActionBlock)block;
+
++ (void)add:(NSString *)title group:(NSString *)group action:(DebugActionBlock)block;
+
++ (void)remove:(NSString *)title;
+
++ (void)remove:(NSString *)title group:(NSString *)group;
+
++ (void)runAction:(NSString *)title;
+
++ (void)runAction:(NSString *)title group:(NSString *)group;
+
+@end
+
+
+@interface DebugWindow : UIWindow
+
++ (instancetype)sharedInstance;
+
+- (void)show;
+
+@end
+
+
+@interface DebugVariable : NSObject
+
++ (nullable id)variableForName:(NSString *)name;
+
++ (void)setVariableForName:(NSString *)name value:(nullable id)value;
+
+@end
+
+NS_ASSUME_NONNULL_END
