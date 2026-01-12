@@ -8,7 +8,7 @@
 
 Pod::Spec.new do |s|
   s.name             = 'iDebugger'
-  s.version          = '0.1.0'
+  s.version          = `cat .version`.strip
   s.summary          = 'A debugger for iOS.'
   s.description      = <<-DESC
 A handy menu entry for debugging iOS apps easily.
@@ -25,8 +25,8 @@ A handy menu entry for debugging iOS apps easily.
   s.default_subspec = 'All'
 
   s.subspec 'Core' do |ss|
-    ss.source_files = 'Classes/*.{h,m}'
-    ss.public_header_files = 'Classes/Debugger.h'
+    ss.source_files = 'Sources/iDebugger/*.{h,m}'
+    ss.public_header_files = 'Sources/iDebugger/Debugger.h'
   end
 
   s.subspec 'FLEX' do |ss|
