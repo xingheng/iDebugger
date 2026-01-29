@@ -233,10 +233,16 @@ static void initialize_debugger(void) {
 
     // Add grouped actions as submenus
     [groupedActions enumerateKeysAndObjectsUsingBlock:^(NSString *group, NSMutableArray<UIAction *> *actions, BOOL *stop) {
+        UIMenuOptions options = UIMenuOptionsDisplayInline;
+
+        if (@available(iOS 15.0, *)) {
+            options = UIMenuOptionsSingleSelection;
+        }
+
         UIMenu *submenu = [UIMenu menuWithTitle:group
                                           image:nil
                                      identifier:nil
-                                        options:UIMenuOptionsSingleSelection
+                                        options:options
                                        children:actions];
         [menuElements addObject:submenu];
     }];

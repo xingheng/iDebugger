@@ -14,15 +14,15 @@ typedef void (^ DebugActionBlock)(void);
 
 + (void)add:(NSString *)title action:(DebugActionBlock)block;
 
-+ (void)add:(NSString *)title group:(NSString *)group action:(DebugActionBlock)block;
++ (void)add:(NSString *)title group:(nullable NSString *)group action:(DebugActionBlock)block;
 
 + (void)remove:(NSString *)title;
 
-+ (void)remove:(NSString *)title group:(NSString *)group;
++ (void)remove:(NSString *)title group:(nullable NSString *)group;
 
 + (void)runAction:(NSString *)title;
 
-+ (void)runAction:(NSString *)title group:(NSString *)group;
++ (void)runAction:(NSString *)title group:(nullable NSString *)group;
 
 @end
 
