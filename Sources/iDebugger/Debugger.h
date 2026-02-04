@@ -8,6 +8,8 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+extern NSNotificationName DebuggerMessageNotification;
+
 typedef void (^ DebugActionBlock)(void);
 
 @interface DebugAction : NSObject
@@ -23,6 +25,15 @@ typedef void (^ DebugActionBlock)(void);
 + (void)runAction:(NSString *)title;
 
 + (void)runAction:(NSString *)title group:(nullable NSString *)group;
+
++ (BOOL)exist:(NSString *)title group:(nullable NSString *)group;
+
+@end
+
+
+@interface DebugAction (Message)
+
++ (void)sendMessage:(NSString *)message;
 
 @end
 

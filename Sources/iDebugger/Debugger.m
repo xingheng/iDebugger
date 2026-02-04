@@ -17,7 +17,15 @@
 
 #define kDebuggerWindowCenterLastPosition   @"debugger.window.center.position"
 
+#define TEST    0
+
+#if TEST
+#define RANDOM_COLOR RGB(arc4random_uniform(256), arc4random_uniform(256), arc4random_uniform(256))
+#endif
+
 static NSMutableArray<DebugAction *> *allDebugActions = nil;
+
+NSNotificationName DebuggerMessageNotification = @"DebuggerMessageNotification";
 
 #pragma mark - DebugAction
 
@@ -104,6 +112,36 @@ static void initialize_debugger(void) {
     }
 }
 
++ (BOOL)exist:(NSString *)title group:(nullable NSString *)group {
+    initialize_debugger();
+
+    return [allDebugActions indexOfObjectPassingTest:^BOOL(DebugAction * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
+        return [obj.title isEqualToString:title] && (obj.group == nil || [obj.group isEqualToString:group]);
+    }] != NSNotFound;
+}
+
+@end
+
+@implementation DebugAction (Message)
+
++ (void)sendMessage:(NSString *)message {
+    if (message.length <= 0) {
+        return;
+    }
+
+    if (NSThread.isMainThread) {
+        [NSNotificationCenter.defaultCenter postNotificationName:DebuggerMessageNotification
+                                                          object:nil
+                                                        userInfo:@{@"Message": message}];
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSNotificationCenter.defaultCenter postNotificationName:DebuggerMessageNotification
+                                                              object:nil
+                                                            userInfo:@{@"Message": message}];
+        });
+    }
+}
+
 @end
 
 #pragma mark - ActionButton
@@ -116,13 +154,204 @@ static void initialize_debugger(void) {
 
 @end
 
+#pragma mark - NotificationViewController
+
+@interface NotificationViewController : UIViewController
+
+@property (nonatomic, strong) UITextView *textView;
+@property (nonatomic, strong) NSMutableArray<NSString *> *notifications;
+@property (nonatomic, strong) NSTimer *dismissTimer;
+
+@property (nonatomic, assign) BOOL isDisposing;
+@property (nonatomic, copy) void (^ dispose)(BOOL finished);
+
+@property (nonatomic, assign) NSTimeInterval timerInterval;
+@property (nonatomic, assign) NSUInteger maxQueueCount;
+
+@end
+
+@implementation NotificationViewController
+
+- (instancetype)init {
+    if (self = [super init]) {
+        _notifications = [NSMutableArray new];
+        _timerInterval = 1;
+        _maxQueueCount = 5;
+    }
+    return self;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+
+    self.textView = [[UITextView alloc] initWithFrame:CGRectZero];
+    self.textView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.textView.editable = NO;
+    self.textView.selectable = YES;
+    self.textView.scrollEnabled = NO;
+    self.textView.font = [UIFont systemFontOfSize:14];
+    self.textView.textContainerInset = UIEdgeInsetsMake(8, 8, 8, 8);
+    self.textView.backgroundColor = [UIColor.systemBackgroundColor colorWithAlphaComponent:0.65];
+    self.textView.layer.cornerRadius = 8;
+    self.textView.layer.masksToBounds = YES;
+
+    [self.view addSubview:self.textView];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [self.textView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+        [self.textView.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],
+        [self.textView.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
+        [self.textView.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor],
+        [self.textView.heightAnchor constraintGreaterThanOrEqualToConstant:20] // Minimal height
+    ]];
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+
+    // Update text view size when view layout
+    [self updateTextViewSize];
+}
+
+- (void)dealloc {
+    // Clean up timer
+    [self.dismissTimer invalidate];
+    self.dismissTimer = nil;
+    // NSLog(@"dealloc notification vc: %p", self);
+}
+
+#pragma mark -
+
+- (void)updateTextViewContent {
+    if (!self.textView) {
+        return;
+    }
+
+    // Combine all notifications with paragraph line breaks
+    NSString *combinedText = [self.notifications componentsJoinedByString:@"\n\n"];
+    self.textView.text = combinedText;
+
+    // Scroll to end to follow cursor
+    if (self.textView.text.length > 0) {
+        NSRange range = NSMakeRange(self.textView.text.length - 1, 1);
+        [self.textView scrollRangeToVisible:range];
+    }
+
+    // Calculate and update text view height
+    [self updateTextViewSize];
+}
+
+- (void)addNotification:(NSString *)notification {
+    if (self.notifications.count >= self.maxQueueCount) {
+        [self.notifications removeObjectAtIndex:0];
+    }
+
+    [self.notifications addObject:notification];
+    [self updateTextViewContent];
+
+    // Schedule removal of the oldest notification using NSTimer
+    [self.dismissTimer invalidate];
+    self.dismissTimer = [NSTimer scheduledTimerWithTimeInterval:self.timerInterval
+                                                         target:self
+                                                       selector:@selector(removeOldestNotification)
+                                                       userInfo:nil
+                                                        repeats:NO];
+}
+
+- (void)removeOldestNotification {
+    // Invalidate the timer since it's firing
+    [self.dismissTimer invalidate];
+    self.dismissTimer = nil;
+
+    if (self.notifications.count <= 0) {
+        return;
+    }
+
+    [self.notifications removeObjectAtIndex:0];
+
+    if (self.notifications.count == 0) {
+        // Dismiss when no notifications left
+        self.isDisposing = YES;
+        !self.dispose ?: self.dispose(NO);
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self dismissViewControllerAnimated:YES completion:nil];
+            !self.dispose ?: self.dispose(YES);
+            self.isDisposing = NO;
+        });
+    } else {
+        [self updateTextViewContent];
+        // Schedule next removal
+        self.dismissTimer = [NSTimer scheduledTimerWithTimeInterval:self.timerInterval
+                                                             target:self
+                                                           selector:@selector(removeOldestNotification)
+                                                           userInfo:nil
+                                                            repeats:NO];
+    }
+}
+
+- (void)updateTextViewSize {
+    if (!self.textView) {
+        return;
+    }
+
+    // Get screen dimensions
+    CGFloat screenWidth = self.view.window.windowScene.screen.bounds.size.width ?: UIScreen.mainScreen.bounds.size.width;
+    CGFloat screenHeight = self.view.window.windowScene.screen.bounds.size.height ?: UIScreen.mainScreen.bounds.size.height;
+
+    // Calculate min and max width
+    CGFloat minWidth = screenWidth * 0.3;
+    CGFloat maxWidth = screenWidth * 0.8;
+    CGFloat maxHeight = screenHeight * 0.5;
+
+    // Calculate required size for text content with maximum width constraint
+    CGSize maxSize = CGSizeMake(maxWidth, CGFLOAT_MAX);
+    CGSize textSize = [self.textView sizeThatFits:maxSize];
+
+    // Calculate dynamic width: use text width, but clamp between min and max
+    CGFloat dynamicWidth = MAX(minWidth, MIN(textSize.width, maxWidth));
+
+    // Calculate dynamic height: use text height, but clamp between min and max
+    CGFloat requiredHeight = textSize.height;
+    CGFloat dynamicHeight = MAX(30, MIN(requiredHeight, maxHeight));
+
+    // Add safe area insets to the content size
+    UIEdgeInsets safeAreaInsets = self.view.safeAreaInsets;
+    CGFloat totalWidth = dynamicWidth + safeAreaInsets.left + safeAreaInsets.right;
+    CGFloat totalHeight = dynamicHeight + safeAreaInsets.top + safeAreaInsets.bottom;
+
+    // Update preferred content size
+    self.preferredContentSize = CGSizeMake(totalWidth, totalHeight);
+}
+
+- (void)cancelDismissTimer {
+    [self.dismissTimer invalidate];
+    self.dismissTimer = nil;
+}
+
+- (void)restartDismissTimer {
+    [self.dismissTimer invalidate];
+    self.dismissTimer = nil;
+    
+    if (self.notifications.count > 0) {
+        self.dismissTimer = [NSTimer scheduledTimerWithTimeInterval:self.timerInterval
+                                                             target:self
+                                                           selector:@selector(removeOldestNotification)
+                                                           userInfo:nil
+                                                            repeats:NO];
+    }
+}
+
+@end
+
 #pragma mark - DebugerViewController
 
-@interface DebugerViewController : UIViewController <UIContextMenuInteractionDelegate>
+@interface DebugerViewController : UIViewController <UIContextMenuInteractionDelegate, UIPopoverPresentationControllerDelegate, UIGestureRecognizerDelegate>
 
 @property (nonatomic, strong) ActionButton *btnAction;
 
 @property (nonatomic, assign) BOOL isMenuDisplaying;
+@property (nonatomic, assign) NotificationViewController *notificationVC;
 
 @end
 
@@ -130,8 +359,6 @@ static void initialize_debugger(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-
-    self.view.backgroundColor = UIColor.clearColor;
 
     ActionButton *btnAction = [ActionButton buttonWithType:UIButtonTypeSystem];
     btnAction.tintColor = RGB(130, 160, 255);
@@ -162,6 +389,7 @@ static void initialize_debugger(void) {
     }
     {
         UIPanGestureRecognizer *panGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
+        panGesture.delegate = self;
         [btnAction addGestureRecognizer:panGesture];
 
         UIContextMenuInteraction *contextMenuInteraction = [[UIContextMenuInteraction alloc] initWithDelegate:self];
@@ -174,8 +402,38 @@ static void initialize_debugger(void) {
         }
     }
 
+#if TEST
+    [btnAction addTarget:self action:@selector(test) forControlEvents:UIControlEventTouchUpInside];
+#endif
+
     [self.view addSubview:btnAction];
+
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(receiveMessage:) name:DebuggerMessageNotification object:nil];
 }
+
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+}
+
+#pragma mark -
+
+#if TEST
+- (void)test {
+    static NSInteger count = 0;
+    // Generate random string with random length
+    NSInteger randomLength = arc4random_uniform(100) + 20;
+    NSString *letters = @"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ";
+    NSMutableString *randomString = [NSMutableString stringWithCapacity:randomLength];
+
+    for (NSInteger i = 0; i < randomLength; i++) {
+        [randomString appendFormat:@"%C", [letters characterAtIndex:arc4random_uniform((uint32_t)[letters length])]];
+    }
+
+    count++;
+
+    [DebugAction sendMessage:[NSString stringWithFormat:@"#%ld: %@ [END]", count, randomString]];
+}
+#endif
 
 - (void)handlePan:(UIPanGestureRecognizer *)gesture {
     CGPoint translation = [gesture translationInView:self.view];
@@ -197,6 +455,50 @@ static void initialize_debugger(void) {
         [[NSUserDefaults standardUserDefaults] setObject:position forKey:kDebuggerWindowCenterLastPosition];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
+}
+
+- (void)receiveMessage:(NSNotification *)notification {
+    NSString *message = notification.userInfo[@"Message"];
+
+    if (message.length <= 0) {
+        return;
+    }
+
+    // Check if we already have a notification VC that's not being disposed
+    if (self.notificationVC && !self.notificationVC.isDisposing) {
+        [self.notificationVC addNotification:message];
+        return;
+    }
+
+    // If notificationVC exists but isDisposing is YES, wait for it to complete
+    if (self.notificationVC) {
+        NSLog(@"Ignore the message: %@", message);
+        return;
+    }
+
+    __weak DebugerViewController *weakSelf = self;
+
+    NotificationViewController *notificationVC = [NotificationViewController new];
+    // NSLog(@"create notification vc: %p", notificationVC);
+    notificationVC.modalPresentationStyle = UIModalPresentationPopover;
+    notificationVC.dispose = ^(BOOL finished) {
+        if (finished) {
+            DebugerViewController *strongSelf = weakSelf;
+            strongSelf.notificationVC = nil;
+        }
+    };
+    self.notificationVC = notificationVC;
+
+    UIPopoverPresentationController *popover = notificationVC.popoverPresentationController;
+    popover.delegate = self;
+    popover.sourceView = self.btnAction;
+    popover.sourceRect = self.btnAction.bounds;
+    popover.canOverlapSourceViewRect = YES;
+    popover.passthroughViews = @[self.btnAction];
+    popover.permittedArrowDirections = UIPopoverArrowDirectionAny;
+
+    [self presentViewController:notificationVC animated:YES completion:nil];
+    [notificationVC addNotification:message];
 }
 
 #pragma mark UIContextMenuInteractionDelegate
@@ -254,12 +556,50 @@ static void initialize_debugger(void) {
     }];
 }
 
+- (nullable UITargetedPreview *)contextMenuInteraction:(UIContextMenuInteraction *)interaction previewForHighlightingMenuWithConfiguration:(UIContextMenuConfiguration *)configuration {
+    // Cancel popover auto-dismiss timer when context menu interaction begins
+    if (self.notificationVC) {
+        [self.notificationVC cancelDismissTimer];
+    }
+    
+    return nil; // Use default preview
+}
+
 - (void)contextMenuInteraction:(UIContextMenuInteraction *)interaction willDisplayMenuForConfiguration:(UIContextMenuConfiguration *)configuration animator:(nullable id<UIContextMenuInteractionAnimating>)animator {
     self.isMenuDisplaying = YES;
 }
 
 - (void)contextMenuInteraction:(UIContextMenuInteraction *)interaction willEndForConfiguration:(UIContextMenuConfiguration *)configuration animator:(nullable id<UIContextMenuInteractionAnimating>)animator {
     self.isMenuDisplaying = NO;
+    
+    // Resume popover auto-dismiss timer if popover is still showing
+    if (self.notificationVC && self.notificationVC.notifications.count > 0) {
+        [self.notificationVC restartDismissTimer];
+    }
+}
+
+#pragma mark - UIGestureRecognizerDelegate
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    // Allow our gesture recognizers to work simultaneously with other recognizers
+    // This helps prevent the popover dismissal gesture from interfering with our button gestures
+    return YES;
+}
+
+#pragma mark - UIPopoverPresentationControllerDelegate
+
+- (UIModalPresentationStyle)adaptivePresentationStyleForPresentationController:(UIPresentationController *)controller {
+    return UIModalPresentationNone; // Ensure popover is not adapted for compact size classes
+}
+
+- (BOOL)presentationControllerShouldDismiss:(UIPresentationController *)presentationController {
+    // Don't allow dismissal when context menu is displaying
+    return !self.isMenuDisplaying;
+}
+
+- (void)presentationControllerDidDismiss:(UIPresentationController *)presentationController {
+    // Reset state when popover is dismissed by user
+    self.notificationVC = nil;
 }
 
 @end
