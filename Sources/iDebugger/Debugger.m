@@ -17,6 +17,11 @@
 
 #define kDebuggerWindowCenterLastPosition   @"debugger.window.center.position"
 
+// Internal class aliases
+#define CLS_PREFIX(_name)               IDEBUGGER_##_name
+#define NotificationViewController      CLS_PREFIX(NotificationViewController)
+#define DebugerViewController           CLS_PREFIX(DebugerViewController)
+
 #define TEST    0
 
 #if TEST
